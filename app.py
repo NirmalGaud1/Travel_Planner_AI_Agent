@@ -1,154 +1,213 @@
+# app.py - AI Travel Planner with Mistral-7B-Instruct-v0.3
+# Recommended requirements.txt:
+# streamlit>=1.42.0
+# transformers>=4.48.0
+# bitsandbytes>=0.45.0
+# torch>=2.5.0
+# accelerate>=1.2.0
+# sentencepiece>=0.2.0
+# safetensors>=0.5.0
+
 import streamlit as st
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 import torch
 import re
 import datetime
 
-# ─── Sidebar & Title ───────────────────────────────────────────────────
+# ─── Page Config ───────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="AI Travel Planner - Mistral 7B",
+    page_icon="🌍",
+    layout="wide"
+)
+
+# ─── Title & Sidebar ───────────────────────────────────────────────────
 st.title("🌍 AI Travel Planner (Powered by Mistral-7B) 🌍")
-st.sidebar.header("About")
-st.sidebar.markdown("""
-This app uses Mistral-7B-Instruct-v0.3 to generate personalized travel itineraries.
-- Realistic 2026 prices & tips
-- Runs on GPU for speed (if available)
-- Generation: 30-90 seconds
 
-**Note:** Model loads once per session. Be patient!
-""")
+with st.sidebar:
+    st.header("About this App")
+    st.markdown("""
+    This application uses **Mistral-7B-Instruct-v0.3** to create personalized travel itineraries.
 
-# ─── Model Loading (cached for speed) ──────────────────────────────────
-@st.cache_resource
+    Features:
+    • Realistic 2026 prices & recommendations
+    • GPU acceleration (when available)
+    • Generation time: 30–90 seconds
+    • Model loads only once per session
+
+    **Note:** First run may take 2–5 minutes to download & load the model.
+    """)
+    st.markdown("---")
+    st.info("Built with ❤️ | January 2026")
+
+# ─── Model Loading (cached) ────────────────────────────────────────────
+@st.cache_resource(show_spinner="Loading Mistral-7B model... Please wait ⏳")
 def load_model():
-    with st.spinner("Loading Mistral-7B model... (first time may take 2-5 mins) ⏳"):
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16
-        )
-        model_name = "mistralai/Mistral-7B-Instruct-v0.3"
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            quantization_config=bnb_config,
-            device_map="auto",
-            torch_dtype=torch.bfloat16,
-        )
-        return tokenizer, model
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16
+    )
 
-tokenizer, model = load_model()
+    model_name = "mistralai/Mistral-7B-Instruct-v0.3"
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name,
+        trust_remote_code=True,      # Required for some Mistral tokenizers
+        use_fast=True                # Force fast tokenizer
+    )
+
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        quantization_config=bnb_config,
+        device_map="auto",
+        torch_dtype=torch.bfloat16,
+        trust_remote_code=True,
+        low_cpu_mem_usage=True
+    )
+
+    return tokenizer, model
+
+# Load model once
+try:
+    tokenizer, model = load_model()
+except Exception as e:
+    st.error(f"Model loading failed: {str(e)}\n\nTry restarting the app or check your GPU memory.")
+    st.stop()
 
 # ─── Generation Function ───────────────────────────────────────────────
 def generate(prompt, max_new_tokens=1400, temperature=0.75, top_p=0.92):
-    inputs = tokenizer(prompt, return_tensors="pt").to("cuda" if torch.cuda.is_available() else "cpu")
-    outputs = model.generate(
-        **inputs,
-        max_new_tokens=max_new_tokens,
-        do_sample=True,
-        temperature=temperature,
-        top_p=top_p,
-    )
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+
+    with torch.inference_mode():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=True,
+            temperature=temperature,
+            top_p=top_p,
+            pad_token_id=tokenizer.eos_token_id
+        )
+
     return tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-# ─── Clean Markdown ────────────────────────────────────────────────────
+# ─── Clean Markdown Output ─────────────────────────────────────────────
 def clean_markdown(text):
     text = text.strip()
-    if "[INST]" in text:
-        text = text.split("[/INST]")[1].strip() if "[/INST]" in text else text
-    markers = ["```markdown", "```md", "```", "```text"]
-    for marker in markers:
+
+    # Remove everything before first [/INST] if present
+    if "[/INST]" in text:
+        text = text.split("[/INST]", 1)[-1].strip()
+
+    # Try common markdown fences
+    for marker in ["```markdown", "```md", "```", "```text"]:
         if marker in text:
             parts = text.split(marker)
             for part in parts[1:]:
-                if len(part.strip()) > 100:
-                    return part.split("```")[0].strip()
+                cleaned = part.split("```")[0].strip()
+                if len(cleaned) > 150:
+                    return cleaned
+
+    # Fallback: take content starting from first heading
     if "#" in text:
-        start = text.find("#")
-        return text[start:].strip()
-    return text if len(text) > 200 else "No plan generated. Try again."
+        start_idx = text.find("#")
+        return text[start_idx:].strip()
 
-# ─── Main App Form ─────────────────────────────────────────────────────
+    # Last resort
+    return text if len(text) > 200 else "Could not extract proper plan format.\n\nRaw output was too short or malformed."
+
+# ─── Main Form ─────────────────────────────────────────────────────────
 with st.form(key="travel_form"):
-    st.subheader("Plan Your Trip!")
-    
-    dest = st.text_input("📍 Destination (city/country)", value="Goa, India")
-    days = st.number_input("🗓️ Number of days", min_value=1, max_value=30, value=5)
-    budget = st.text_input("💰 Total budget (approx in INR or currency)", value="₹80,000")
-    dates = st.text_input("📅 Travel month/year (or flexible)", value="March 2026")
-    interests = st.text_input("🎯 Interests (beaches, culture, food...)", value="beaches, food, relaxation")
-    people = st.text_input("👥 Travelers (e.g. 2 adults)", value="2 adults")
-    special = st.text_input("✨ Special requests (vegetarian, budget stay...)", value="None")
-    
-    submit = st.form_submit_button("Generate My Travel Plan! ✨")
+    st.subheader("Tell us about your trip ✈️")
 
-if submit:
-    with st.spinner("Creating your personalized itinerary... (30-90 seconds) ⏳"):
-        prompt = f"""[INST] You are an expert travel planner, specializing in realistic 2026 trips with current prices, weather, and trends.
+    col1, col2 = st.columns(2)
 
-Create a detailed, exciting travel itinerary for:
+    with col1:
+        destination = st.text_input("📍 Destination (city/country)", value="Goa, India")
+        days = st.number_input("🗓️ Number of days", min_value=1, max_value=30, value=5)
+        budget = st.text_input("💰 Approximate total budget", value="₹80,000")
 
-Destination: {dest}
+    with col2:
+        dates = st.text_input("📅 When are you traveling? (month/year or flexible)", value="March 2026")
+        interests = st.text_input("🎯 Main interests", value="beaches, food, relaxation")
+        travelers = st.text_input("👥 Number of travelers", value="2 adults")
+
+    special_requests = st.text_input("✨ Any special requests?", value="None (vegetarian food, budget stay, etc.)")
+
+    submit_button = st.form_submit_button("✨ Generate My Travel Plan ✨", use_container_width=True)
+
+# ─── Processing on Submit ──────────────────────────────────────────────
+if submit_button:
+    with st.spinner("Creating your personalized travel itinerary... (30–90 seconds)"):
+        prompt = f"""[INST] You are an expert travel planner specialized in realistic 2026 travel planning with current prices, weather patterns, and trends.
+
+Create a detailed, beautiful, and practical travel itinerary for:
+
+Destination: {destination}
 Duration: {days} days
-Budget: {budget} total
-Dates: {dates}
-Travelers: {people}
-Interests: {interests}
-Special requests: {special}
+Total budget: {budget}
+Travel period: {dates}
+Number of travelers: {travelers}
+Main interests: {interests}
+Special requests: {special_requests}
 
-Use this exact markdown structure with emojis:
+Follow **exactly** this markdown structure. Use emojis. Be exciting but realistic.
 
-# Trip to {dest}
+# Trip to {destination}
 
 ## Quick Overview
-- Duration: 
-- Estimated cost range (mid-range): 
-- Weather & best time notes: 
-- Overall vibe: 
+- Duration:
+- Estimated cost range (mid-range):
+- Weather & best time notes:
+- Overall vibe:
 
 ## Day-by-Day Itinerary
 
-### Day 1: Arrival & Exploration
-- Morning: 
-- Afternoon: 
-- Evening: 
-- Suggested accommodation: 
-- Approx. daily cost: 
+### Day 1: Arrival & First Exploration
+- Morning:
+- Afternoon:
+- Evening:
+- Suggested accommodation:
+- Approx. daily cost:
 
 ### Day 2: ...
 (continue for all {days} days)
 
-## Must-Try Food & Experiences
-## Budget Breakdown (in INR or specified currency)
-- Flights/Transport: 
-- Accommodation: 
-- Food: 
-- Activities: 
-- Local travel/Misc: 
-- Total estimate: 
+## Must-Try Food & Local Experiences
+
+## Realistic Budget Breakdown
+- Flights/Transport:
+- Accommodation:
+- Food:
+- Activities/Sightseeing:
+- Local transport/Misc:
+- Total estimate:
 
 ## Practical Tips for 2026
-- Transport options
-- Safety & apps
-- Sustainable ideas
+- Best transport options
+- Safety notes
+- Useful apps
+- Sustainable travel ideas
 
-Output ONLY the clean markdown plan. No extra text. [/INST]"""
-        
-        raw_response = generate(prompt)
-        plan = clean_markdown(raw_response)
-    
+Output **ONLY** the clean markdown itinerary. No extra explanations or text outside the markdown. [/INST]"""
+
+        raw_output = generate(prompt)
+        cleaned_plan = clean_markdown(raw_output)
+
+    st.success("Your travel plan is ready!")
     st.markdown("### ✨ Your Personalized Travel Itinerary ✨")
-    st.markdown(plan)
-    
-    # Download button after displaying
-    safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', dest)
-    filename = f"Travel_Plan_{safe_name}_{datetime.date.today()}.md"
+    st.markdown(cleaned_plan)
+
+    # Download button
+    safe_dest = re.sub(r'[^a-zA-Z0-9_-]', '_', destination)
+    filename = f"Travel_Plan_{safe_dest}_{datetime.date.today()}.md"
+
     st.download_button(
         label="📥 Download Plan as Markdown",
-        data=plan,
+        data=cleaned_plan,
         file_name=filename,
-        mime="text/markdown"
+        mime="text/markdown",
+        key="download_btn"
     )
-
-# ─── Footer ────────────────────────────────────────────────────────────
-st.sidebar.markdown("---")
-st.sidebar.info("Built with ❤️ by Nirmal Gaud | January 2026")
