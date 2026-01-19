@@ -1,0 +1,6 @@
+streamlit==1.42.2
+transformers==4.48.1
+bitsandbytes==0.45.1
+torch==2.5.1
+accelerate==1.2.1
+safetensors==0.5.2
