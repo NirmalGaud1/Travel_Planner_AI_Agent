@@ -1,5 +1,5 @@
 import streamlit as st
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
 import re
 import datetime
@@ -10,67 +10,53 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🌍 AI Travel Planner 🌍")
+st.title("🌍 AI Travel Planner (CPU-Friendly Version) 🌍")
 
 with st.sidebar:
     st.header("About this App")
     st.markdown("""
-    This app uses **Qwen2.5-3B-Instruct** (lightweight & fast LLM)  
-    to generate personalized travel itineraries.
+    This app uses **Qwen2.5-1.5B-Instruct** (very lightweight LLM)  
+    running fully on CPU for maximum compatibility.
 
-    Advantages:
-    • Loads in 1–3 minutes
-    • Uses very little memory/GPU
-    • Fast generation (10–40 seconds)
-    • Good quality for travel plans
+    • Loads in 1–4 minutes on Streamlit Cloud  
+    • Uses ~1.5–2.5 GB RAM  
+    • Generation: 20–90 seconds  
+    • No GPU required!
 
-    Note: First run may take a few minutes to download the model.
+    Perfect for free cloud deployment.
     """)
     st.markdown("---")
     st.info("Built with ❤️ | January 2026")
 
-@st.cache_resource(show_spinner="Loading lightweight Qwen2.5-3B model... ⏳")
+@st.cache_resource(show_spinner="Loading lightweight Qwen2.5-1.5B model... (CPU only) ⏳")
 def load_model():
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16
-    )
-
-    model_name = "Qwen/Qwen2.5-3B-Instruct"
+    model_name = "Qwen/Qwen2.5-1.5B-Instruct"
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_name,
-        trust_remote_code=True,
-        use_fast=True
+        trust_remote_code=True
     )
 
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        quantization_config=bnb_config,
-        device_map="auto",
-        dtype=torch.bfloat16,
+        device_map="cpu",                # Force CPU
+        torch_dtype=torch.float32,       # CPU safe dtype
         trust_remote_code=True,
         low_cpu_mem_usage=True
     )
-
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
 
     return tokenizer, model
 
 try:
     tokenizer, model = load_model()
 except Exception as e:
-    st.error(f"Model loading failed: {str(e)}\n\nTry restarting the app.")
+    st.error(f"Model loading failed: {str(e)}\n\nTry rebooting the app from dashboard.")
     st.stop()
 
-def generate(prompt, max_new_tokens=1200, temperature=0.7, top_p=0.9):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+def generate(prompt, max_new_tokens=1000, temperature=0.7, top_p=0.9):
+    inputs = tokenizer(prompt, return_tensors="pt").to("cpu")
 
-    with torch.inference_mode():
+    with torch.no_grad():
         outputs = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
@@ -119,74 +105,61 @@ with st.form(key="travel_form"):
     submit_button = st.form_submit_button("✨ Generate My Travel Plan ✨", use_container_width=True)
 
 if submit_button:
-    with st.spinner("Creating your personalized itinerary... (10–40 seconds)"):
+    with st.spinner("Creating your itinerary... (20–90 seconds on CPU)"):
         prompt = f"""<|im_start|>system
-You are an expert travel planner specializing in realistic 2026 travel planning with current prices, weather, and trends.
-Create a detailed, beautiful, and practical travel itinerary.
-Use markdown format with emojis. Be exciting but realistic.<|im_end|>
+You are an expert travel planner for realistic 2026 trips.
+Create a detailed, beautiful itinerary using markdown and emojis.<|im_end|>
 <|im_start|>user
-Create a detailed travel itinerary for:
-
 Destination: {destination}
 Duration: {days} days
-Total budget: {budget}
-Travel period: {dates}
-Number of travelers: {travelers}
-Main interests: {interests}
+Budget: {budget}
+Dates: {dates}
+Travelers: {travelers}
+Interests: {interests}
 Special requests: {special_requests}
 
-Follow this exact structure:
+Structure exactly like this:
 
 # Trip to {destination}
 
 ## Quick Overview
 - Duration:
-- Estimated cost range:
-- Weather & best time notes:
-- Overall vibe:
+- Estimated cost:
+- Weather notes:
+- Vibe:
 
 ## Day-by-Day Itinerary
 
-### Day 1: Arrival & First Exploration
+### Day 1: ...
 - Morning:
 - Afternoon:
 - Evening:
-- Suggested accommodation:
-- Approx. daily cost:
+- Stay:
+- Cost:
 
-(continue for all {days} days)
+(continue all days)
 
-## Must-Try Food & Local Experiences
+## Food & Experiences
 
-## Realistic Budget Breakdown
-- Flights/Transport:
-- Accommodation:
-- Food:
-- Activities/Sightseeing:
-- Local transport/Misc:
-- Total estimate:
+## Budget Breakdown
 
-## Practical Tips for 2026
-- Best transport options
-- Safety notes
-- Useful apps
-- Sustainable travel ideas
+## 2026 Tips
 
-Output ONLY the markdown plan.<|im_end|>
+Only output markdown.<|im_end|>
 <|im_start|>assistant"""
 
         raw_output = generate(prompt)
         cleaned_plan = clean_markdown(raw_output)
 
-    st.success("Your travel plan is ready!")
-    st.markdown("### ✨ Your Personalized Travel Itinerary ✨")
+    st.success("Plan ready!")
+    st.markdown("### ✨ Your Travel Itinerary ✨")
     st.markdown(cleaned_plan)
 
     safe_dest = re.sub(r'[^a-zA-Z0-9_-]', '_', destination)
     filename = f"Travel_Plan_{safe_dest}_{datetime.date.today()}.md"
 
     st.download_button(
-        label="📥 Download Plan as Markdown",
+        label="📥 Download as Markdown",
         data=cleaned_plan,
         file_name=filename,
         mime="text/markdown"
