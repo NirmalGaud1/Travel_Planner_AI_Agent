@@ -1,12 +1,12 @@
-# app.py - AI Travel Planner with Mistral-7B-Instruct-v0.3
-# Recommended requirements.txt:
+# app.py - AI Travel Planner with Mistral-7B-Instruct-v0.2 (more reliable tokenizer)
+# Recommended requirements.txt for Streamlit Cloud / HF Spaces:
 # streamlit>=1.42.0
 # transformers>=4.48.0
 # bitsandbytes>=0.45.0
 # torch>=2.5.0
 # accelerate>=1.2.0
-# sentencepiece>=0.2.0
 # safetensors>=0.5.0
+# (No need for sentencepiece with v0.2)
 
 import streamlit as st
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
@@ -27,7 +27,7 @@ st.title("🌍 AI Travel Planner (Powered by Mistral-7B) 🌍")
 with st.sidebar:
     st.header("About this App")
     st.markdown("""
-    This application uses **Mistral-7B-Instruct-v0.3** to create personalized travel itineraries.
+    This application uses **Mistral-7B-Instruct-v0.2** (reliable version) to create personalized travel itineraries.
 
     Features:
     • Realistic 2026 prices & recommendations
@@ -50,12 +50,12 @@ def load_model():
         bnb_4bit_compute_dtype=torch.bfloat16
     )
 
-    model_name = "mistralai/Mistral-7B-Instruct-v0.3"
+    model_name = "mistralai/Mistral-7B-Instruct-v0.2"  # ← Switched to v0.2 for tokenizer compatibility
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_name,
-        trust_remote_code=True,      # Required for some Mistral tokenizers
-        use_fast=True                # Force fast tokenizer
+        trust_remote_code=True,
+        use_fast=True
     )
 
     model = AutoModelForCausalLM.from_pretrained(
